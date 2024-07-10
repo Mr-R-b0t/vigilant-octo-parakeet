@@ -1,0 +1,20 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "{{ SMTP_HOST }}:465"
+  smtp_from: "{{ SMTP_USERMAIL }}"
+  smtp_auth_username: "{{ SMTP_USER }}"
+  smtp_auth_password: "{{ SMTP_PWD }}"
+  smtp_require_tls: false
+
+route:
+  group_by: ["alertname"]
+  group_wait: 30s
+  group_interval: 1m
+  repeat_interval: 30m
+  receiver: "email_notifications"
+
+receivers:
+  - name: "email_notifications"
+    email_configs:
+      - to: "example.gmail.com"
+      - to: "example2.gmail.com"

@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  client:
+    image: ${CI_REGISTRY_IMAGE}/vue-client:${CI_ENVIRONMENT_SLUG}
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.client.loadbalancer.server.port=80"
+        - "traefik.http.routers.vue-client.rule=Host(`${DOMAIN}`)"
+        - "traefik.http.routers.vue-client.entrypoints=websecure"
+        - "traefik.http.routers.vue-client.tls.certresolver=myresolver"
+    env_file:
+      - .env
+    networks:
+      - gateway
+
+  server:
+    image: ${CI_REGISTRY_IMAGE}/server:${CI_ENVIRONMENT_SLUG}
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+        - "traefik.http.routers.redirs.rule=hostregexp(`{host:.+}`)"
+        - "traefik.http.routers.redirs.entrypoints=web"
+        - "traefik.http.routers.redirs.middlewares=redirect-to-https"
+        - "traefik.http.routers.vue-server.rule=Host(`api.${DOMAIN}`)"
+        - "traefik.http.routers.vue-server.entrypoints=websecure"
+        - "traefik.http.routers.vue-server.tls.certresolver=myresolver"
+    env_file:
+      - .env
+    networks:
+      - gateway
+
+networks:
+  gateway:
+    external: true

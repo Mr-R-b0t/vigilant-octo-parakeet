@@ -1,0 +1,306 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: "traefik"
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.metrics.address=:8082"
+      - "--entrypoints.ts.address=:9987/udp"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--certificatesresolvers.myresolver.acme.dnschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.dnschallenge.provider=ovh"
+      - "--certificatesresolvers.myresolver.acme.caserver=https://acme-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--log.level=INFO"
+      - "--log.format=common"
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+      - "--accesslog.format=common"
+      - "--accesslog.fields.defaultmode=keep"
+      - "--accesslog.fields.headers.defaultmode=keep"
+      - "--metrics=true"
+      - "--metrics.prometheus=true"
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.traefik.rule=Host(`${TRAEFIK_DOMAIN}`)"
+        - "traefik.http.routers.traefik.entrypoints=websecure"
+        - "traefik.http.routers.traefik.tls.certresolver=myresolver"
+        - "traefik.http.routers.traefik.service=api@internal"
+        - "com.centurylinklabs.watchtower.enable=true"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8082:8082"
+    environment:
+      - "OVH_ENDPOINT=${OVH_ENDPOINT}"
+      - "OVH_APPLICATION_KEY=${OVH_APPLICATION_KEY}"
+      - "OVH_APPLICATION_SECRET=${OVH_APPLICATION_SECRET}"
+      - "OVH_CONSUMER_KEY=${OVH_CONSUMER_KEY}"
+      - TZ=${TIMEZONE}
+    volumes:
+      - "${TRAEFIK_LETSENCRYPT_PATH}:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "${TRAEFIK_LOGS_PATH}:/var/log/traefik"
+    networks:
+      - gateway
+      - workers
+      - logs
+
+  dozzle:
+    image: amir20/dozzle:latest
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dozzle.rule=Host(`${DOZZLE_DOMAIN}`) && PathPrefix(`/dozzle`)"
+        - "traefik.http.routers.dozzle.entrypoints=websecure"
+        - "traefik.http.routers.dozzle.tls.certresolver=myresolver"
+        - "traefik.http.routers.dozzle.middlewares=auth@docker"
+        - "com.centurylinklabs.watchtower.enable=true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - DOZZLE_BASE=/dozzle
+      - DOZZLE_LOGS=/var/run/docker.sock
+      - DOZZLE_THEME=${DOZZLE_THEME}
+      - DOZZLE_LOG_DRIVER=local
+    networks:
+      - proxy
+
+  netdata:
+    image: netdata/netdata
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.netdata.rule=Host(`${NETDATA_DOMAIN}`)"
+        - "traefik.http.routers.netdata.entrypoints=websecure"
+        - "traefik.http.routers.netdata.tls.certresolver=myresolver"
+        - "traefik.http.routers.netdata.middlewares=auth@docker,netdatapathstrip"
+        - "traefik.http.middlewares.netdatapathstrip.stripprefix.prefixes=/netdata"
+        - "com.centurylinklabs.watchtower.enable=true"
+    volumes:
+      - netdataconfig:/etc/netdata
+      - netdatalib:/var/lib/netdata
+      - netdatacache:/var/cache/netdata
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      - PGID=${NETDATA_PGID}
+      - PUID=${NETDATA_PUID}
+      - TZ=${TIMEZONE}
+    networks:
+      - proxy
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.uptime-kuma.rule=Host(`${UPTIME_KUMA_DOMAIN}`)"
+        - "traefik.http.routers.uptime-kuma.entrypoints=websecure"
+        - "traefik.http.routers.uptime-kuma.tls=true"
+        - "traefik.http.routers.uptime-kuma.tls.certresolver=myresolver"
+        - "traefik.http.routers.uptime-kuma.middlewares=auth@docker"
+        - "com.centurylinklabs.watchtower.enable=true"
+    volumes:
+      - ${UPTIME_KUMA_DATA_PATH}:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy
+
+  node-exporter:
+    image: prom/node-exporter
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.node-exporter.rule=Host(`${NODE_EXPORTER_DOMAIN}`)"
+        - "traefik.http.routers.node-exporter.entrypoints=websecure"
+        - "traefik.http.routers.node-exporter.tls.certresolver=myresolver"
+        - "traefik.http.routers.node-exporter.middlewares=auth@docker"
+    volumes:
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/rootfs:ro"
+      - "./node-exporter/web.yml:/etc/node-exporter/web.yml"
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.ignored-mount-points"
+      - "^/(sys|proc|dev|host|etc)($$|/)"
+      - "--web.config.file=/etc/node-exporter/web.yml"
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TIMEZONE}
+    networks:
+      - proxy
+
+  prometheus:
+    image: prom/prometheus:latest
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.prometheus.rule=Host(`${PROMETHEUS_DOMAIN}`)"
+        - "traefik.http.routers.prometheus.entrypoints=websecure"
+        - "traefik.http.routers.prometheus.tls.certresolver=myresolver"
+        - "traefik.http.routers.prometheus.middlewares=auth@docker"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-lifecycle"
+    environment:
+      PUID: 0
+      PGID: 0
+      TZ: ${TIMEZONE}
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - ./prometheus/alertmanager.yml:/etc/prometheus/alertmanager.yml
+    networks:
+      - proxy
+
+  alertmanager:
+    image: prom/alertmanager
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.alertmanager.rule=Host(`${ALERTMANAGER_DOMAIN}`)"
+        - "traefik.http.routers.alertmanager.entrypoints=websecure"
+        - "traefik.http.routers.alertmanager.tls.certresolver=myresolver"
+        - "traefik.http.routers.alertmanager.middlewares=auth@docker"
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - ./prometheus/alert_rules.yml:/etc/alertmanager/alert_rules.yml
+    networks:
+      - proxy
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.blackbox-exporter.rule=Host(`${BLACKBOX_EXPORTER_DOMAIN}`)"
+        - "traefik.http.routers.blackbox-exporter.entrypoints=websecure"
+        - "traefik.http.routers.blackbox-exporter.tls.certresolver=myresolver"
+        - "traefik.http.routers.blackbox-exporter.middlewares=auth@docker"
+    volumes:
+      - ./blackbox/blackbox.yml:/config/blackbox.yml
+    command:
+      - "--config.file=/config/blackbox.yml"
+    networks:
+      - proxy
+
+  grafana:
+    image: grafana/grafana
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_DOMAIN}`)"
+        - "traefik.http.routers.grafana.entrypoints=websecure"
+        - "traefik.http.routers.grafana.tls.certresolver=myresolver"
+        - "traefik.http.routers.grafana.middlewares=auth@docker"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PWD}
+      - GF_AUTH_PROXY_ENABLED=true
+      - GF_AUTH_PROXY_HEADER_NAME=X-authentik-username
+      - GF_AUTH_PROXY_HEADER_PROPERTY=username
+      - GF_AUTH_PROXY_AUTO_SIGN_UP=true
+    volumes:
+      - ./grafana:/etc/grafana/provisioning/datasources
+      - grafana:/var/lib/grafana
+    networks:
+      - proxy
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_VERSION:-2023.8.3}
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.authentik.rule=Host(`${AUTHENTIK_DOMAIN}`)"
+        - "traefik.http.routers.authentik.entrypoints=websecure"
+        - "traefik.http.routers.authentik.tls.certresolver=myresolver"
+        - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+    volumes:
+      - authentik-data:/data
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASS}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+    depends_on:
+      - authentik-postgres
+      - authentik-redis
+    networks:
+      - proxy
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_VERSION:-2023.8.3}
+    command: worker
+    volumes:
+      - authentik-data:/data
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_PG_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_PG_DB}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASS}
+      AUTHENTIK_REDIS__HOST: authentik-redis
+    depends_on:
+      - authentik-postgres
+      - authentik-redis
+    networks:
+      - proxy
+
+  authentik-postgres:
+    image: postgres:12-alpine
+    volumes:
+      - authentik-postgres:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${AUTHENTIK_PG_USER}
+      POSTGRES_DB: ${AUTHENTIK_PG_DB}
+      POSTGRES_PASSWORD: ${AUTHENTIK_PG_PASS}
+    networks:
+      - proxy
+
+  authentik-redis:
+    image: redis:alpine
+    networks:
+      - proxy
+
+volumes:
+  netdataconfig:
+  netdatalib:
+  netdatacache:
+  grafana:
+  authentik-data:
+  authentik-postgres:
+
+networks:
+  gateway:
+    external: true
+  workers:
+    external: true
+  proxy:
+    external: true
+  logs:
+    external: true

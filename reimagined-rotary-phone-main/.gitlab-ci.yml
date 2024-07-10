@@ -1,0 +1,114 @@
+stages:
+  - build
+  - test
+  - deploy
+  - uat
+
+variables:
+  DOCKER_HOST: tcp://docker:2376
+  DOCKER_TLS_CERTDIR: "/certs"
+  DEPLOY_USER: admin
+
+.build_template: &build_definition
+  image: node:14
+  before_script:
+    - docker info
+    - echo "$CI_JOB_TOKEN" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+
+build_frontend:
+  <<: *build_definition
+  stage: build
+  script:
+    - cd vue-client
+    - bun install
+    - bun run build
+  artifacts:
+    paths:
+      - vue-client/dist
+  only:
+    - main
+
+test_backend:
+  <<: *build_definition
+  stage: test
+  script:
+    - cd server
+    - bun install
+    - bun install mocha
+    - bun test # Run backend unit tests
+  only:
+    - main
+
+.deploy_template: &deploy_definition
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE/vue-client:$CI_ENVIRONMENT_SLUG -f vue-client/Dockerfile vue-client
+    - docker build -t $CI_REGISTRY_IMAGE/server:$CI_ENVIRONMENT_SLUG -f server/Dockerfile server
+    - docker push $CI_REGISTRY_IMAGE/vue-client:$CI_ENVIRONMENT_SLUG
+    - docker push $CI_REGISTRY_IMAGE/server:$CI_ENVIRONMENT_SLUG
+    - ssh $DEPLOY_USER@$DEPLOY_SERVER 'docker pull $CI_REGISTRY_IMAGE/vue-client:$CI_ENVIRONMENT_SLUG && docker pull $CI_REGISTRY_IMAGE/server:$CI_ENVIRONMENT_SLUG && docker stack deploy -c docker-compose.$CI_ENVIRONMENT_SLUG.yml $CI_ENVIRONMENT_SLUG'
+deploy_dev:
+  <<: *deploy_definition
+  environment:
+    name: dev
+  variables:
+    DEPLOY_SERVER: $DEV_DEPLOY_SERVER
+  only:
+    - develop
+
+deploy_int:
+  <<: *deploy_definition
+  environment:
+    name: int
+  variables:
+    DEPLOY_SERVER: $INT_DEPLOY_SERVER
+  only:
+    - /^release\/.*$/
+
+deploy_preprod:
+  <<: *deploy_definition
+  environment:
+    name: preprod
+  variables:
+    DEPLOY_SERVER: $PREPROD_DEPLOY_SERVER
+  only:
+    - /^hotfix\/.*$/
+    - /^release\/.*$/
+
+deploy_prod:
+  <<: *deploy_definition
+  environment:
+    name: prod
+  variables:
+    DEPLOY_SERVER: $PROD_DEPLOY_SERVER
+  only:
+    - main
+  when: manual
+
+uat_tests:
+  stage: uat
+  image: python:3.9
+  services:
+    - docker:dind
+  before_script:
+    - pip install selenium robotframework robotframework-seleniumlibrary
+    - docker pull $CI_REGISTRY_IMAGE/vue-client:$CI_ENVIRONMENT_SLUG
+    - docker pull $CI_REGISTRY_IMAGE/server:$CI_ENVIRONMENT_SLUG
+    - docker-compose -f docker-compose.UAT.yml up -d
+  script:
+    - cd vue-client/tests
+    - robot --variable URL:${UAT_URL} navbar_test.robot
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+  variables:
+    UAT_URL: http://localhost:8080
+  only:
+    - branches
+
+  dependencies:
+    - deploy_dev
+    - deploy_int
+    - deploy_preprod

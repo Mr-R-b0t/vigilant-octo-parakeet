@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  client:
+    image: ${CI_REGISTRY_IMAGE}/vue-client:${CI_ENVIRONMENT_SLUG:-dev}
+    ports:
+      - "8080:80"
+    environment:
+      VUE_APP_API_URL: http://localhost:8081/api
+
+  server:
+    image: ${CI_REGISTRY_IMAGE}/server:${CI_ENVIRONMENT_SLUG:-dev}
+    ports:
+      - "8081:80"
+    env_file:
+      - .env

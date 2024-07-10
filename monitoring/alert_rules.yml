@@ -1,0 +1,11 @@
+groups:
+  - name: blackbox_check
+    rules:
+      - alert: EndpointDown
+        expr: probe_http_status_code != 200
+        for: 5s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Endpoint {{ $labels.instance }} down"
+          description: "The endpoint {{ $labels.instance }} has been down for more than 1 minute."

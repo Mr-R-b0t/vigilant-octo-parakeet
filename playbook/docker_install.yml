@@ -1,0 +1,36 @@
+- name: Update system and install Docker
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Ensure dnf package manager is present
+      package:
+        name: dnf
+        state: present
+
+    - name: Update all packages using dnf
+      dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
+        autoremove: yes
+
+    - name: Install required system packages for Docker
+      dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+
+    - name: Start Docker service and enable it on boot
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add the current user to the Docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes

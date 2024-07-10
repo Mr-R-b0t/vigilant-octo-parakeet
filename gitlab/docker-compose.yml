@@ -1,0 +1,49 @@
+version: "3.3"
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: gitlab
+    restart: always
+    hostname: "${GITLAB_HOSTNAME}"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: "from_file('/gitlab.rb')"
+    volumes:
+      - "${GITLAB_HOME}/config:/etc/gitlab"
+      - "${GITLAB_HOME}/logs:/var/log/gitlab"
+      - "${GITLAB_HOME}/data:/var/opt/gitlab"
+    configs:
+      - source: gitlab.rb
+        target: /gitlab.rb
+    ports:
+      - target: 22
+        published: ${GITLAB_SSH_PORT}
+        mode: host
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitlab.rule=Host(`${GITLAB_HOSTNAME}`)"
+      - "traefik.http.routers.gitlab.entrypoints=websecure"
+      - "traefik.http.services.gitlab.loadbalancer.server.port=80"
+      - "traefik.http.routers.gitlab.service=gitlab"
+      - "traefik.http.routers.gitlab.tls.certresolver=myresolver"
+      - "traefik.http.routers.registry.rule=Host(`${REGISTRY_HOSTNAME}`)"
+      - "traefik.http.routers.registry.entrypoints=websecure"
+      - "traefik.http.routers.registry.service=registry"
+      - "traefik.http.routers.registry.tls.certresolver=myresolver"
+      - "traefik.http.services.registry.loadbalancer.server.port=5005"
+      - "traefik.tcp.routers.gitlab-ssh.entrypoints=ssh-gitlab"
+      - "traefik.tcp.routers.gitlab-ssh.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.gitlab-ssh.service=gitlab-ssh-svc"
+      - "traefik.tcp.services.gitlab-ssh-svc.loadbalancer.server.port=22"
+      - "com.centurylinklabs.watchtower.enable=true"
+    shm_size: "256m"
+    networks:
+      - proxy
+
+configs:
+  gitlab.rb:
+    file: ./gitlab.rb
+
+networks:
+  proxy:
+    external: true
